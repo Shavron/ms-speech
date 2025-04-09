@@ -4,18 +4,40 @@ import {
   TranslationRecognizer,
   AudioConfig,
   ResultReason,
+  SpeechConfig,
+  SpeechSynthesizer,
 } from "microsoft-cognitiveservices-speech-sdk";
 
 const SpeechTranslator = () => {
   const [inputLang, setInputLang] = useState("en-US");
-  const [outputLang, setOutputLang] = useState("gu");
+  const [outputLang, setOutputLang] = useState("hi");
   const [transcription, setTranscription] = useState("");
   const [isTranslating, setIsTranslating] = useState(false);
+  const [enableTTS, setEnableTTS] = useState(true);
 
   const recognizerRef = useRef(null);
+  const synthesizersRef = useRef({});
 
   const subscriptionKey = process.env.REACT_APP_subscriptionKey;
   const serviceRegion = process.env.REACT_APP_serviceRegion; // e.g., "eastus"
+
+  // Map of language codes to voice names for TTS
+  const voiceMap = {
+    "en-US": "en-US-JennyNeural",
+    "es": "es-ES-ElviraNeural",
+    "fr": "fr-FR-DeniseNeural",
+    "de": "de-DE-KatjaNeural",
+    "it": "it-IT-ElsaNeural",
+    "pt": "pt-BR-FranciscaNeural",
+    "zh-Hans": "zh-CN-XiaoxiaoNeural",
+    "ja": "ja-JP-NanamiNeural",
+    "ko": "ko-KR-SunHiNeural",
+    "ru": "ru-RU-SvetlanaNeural",
+    "ar": "ar-SA-ZariyahNeural",
+    "hi": "hi-IN-SwaraNeural",
+    "gu": "gu-IN-DhwaniNeural",
+    // Add more language-to-voice mappings as needed
+  };
 
   const languageOptions = [
     { code: "af", name: "Afrikaans" },
@@ -111,6 +133,56 @@ const SpeechTranslator = () => {
     { code: "yua", name: "Yucatec Maya" },
   ];
 
+  // Creates or gets a speech synthesizer for the given language
+  const getSynthesizer = (lang) => {
+    if (synthesizersRef.current[lang]) {
+      return synthesizersRef.current[lang];
+    }
+
+    // Create speech config
+    const speechConfig = SpeechConfig.fromSubscription(
+      subscriptionKey,
+      serviceRegion
+    );
+
+    // Set the voice name based on the language or use a default
+    const voiceName = voiceMap[lang] || `${lang}-Neural`;
+    speechConfig.speechSynthesisVoiceName = voiceName;
+
+    // Create the synthesizer without audio config (will use default speakers)
+    const synthesizer = new SpeechSynthesizer(speechConfig);
+
+    // Store it for reuse
+    synthesizersRef.current[lang] = synthesizer;
+
+    return synthesizer;
+  };
+
+  // Function to speak the translated text
+  const speakTranslation = (text, lang) => {
+    console.log('Speaking:', text);
+    if (!enableTTS) return;
+
+    try {
+      const synthesizer = getSynthesizer(lang);
+      synthesizer.speakTextAsync(
+        text,
+        result => {
+          if (result) {
+            synthesizer.close();
+            delete synthesizersRef.current[lang];
+          }
+        },
+        error => {
+          console.error(`Error synthesizing speech: ${error}`);
+          synthesizer.close();
+          delete synthesizersRef.current[lang];
+        }
+      );
+    } catch (error) {
+      console.error(`Failed to initialize speech synthesis: ${error}`);
+    }
+  };
 
   const initializeRecognizer = () => {
     const translationConfig = SpeechTranslationConfig.fromSubscription(
@@ -135,6 +207,11 @@ const SpeechTranslator = () => {
       if (e.result.reason === ResultReason.TranslatedSpeech) {
         const translation = e.result.translations.get(outputLang);
         setTranscription((prev) => `${prev}\n${translation}`);
+
+        // Speak the translated text
+        if (translation && translation.trim().length > 0) {
+          speakTranslation(translation, outputLang);
+        }
       } else if (e.result.reason === ResultReason.NoMatch) {
         setTranscription((prev) => `${prev}\n[No match]`);
       }
@@ -175,17 +252,25 @@ const SpeechTranslator = () => {
         }
       );
     }
+
+    // Close all synthesizers
+    Object.values(synthesizersRef.current).forEach(synthesizer => {
+      try {
+        synthesizer.close();
+      } catch (e) {
+        console.error("Error closing synthesizer:", e);
+      }
+    });
+    synthesizersRef.current = {};
   };
 
   useEffect(() => {
     try {
-      document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight
+      document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
     } catch (error) {
-
+      // Ignore scroll errors
     }
-  }, [transcription])
-
-
+  }, [transcription]);
 
   useEffect(() => {
     return () => {
@@ -211,7 +296,6 @@ const SpeechTranslator = () => {
               {lang.name}
             </option>
           ))}
-
         </select>
       </div>
 
@@ -223,13 +307,24 @@ const SpeechTranslator = () => {
           disabled={isTranslating}
         >
           <option key={''} value={''}>-- output language --</option>
-
           {languageOptions.map((lang) => (
             <option key={lang.code} value={lang.code}>
               {lang.name}
             </option>
           ))}
         </select>
+      </div>
+
+      <div style={{ marginBottom: "10px" }}>
+        <label>
+          <input
+            type="checkbox"
+            checked={enableTTS}
+            onChange={(e) => setEnableTTS(e.target.checked)}
+            disabled={isTranslating}
+          />
+          Enable Text-to-Speech
+        </label>
       </div>
 
       <div style={{ marginBottom: "10px" }}>
@@ -247,7 +342,6 @@ const SpeechTranslator = () => {
         readOnly
         style={{ width: "100%", height: "200px", resize: "none" }}
       />
-
     </div>
   );
 };
