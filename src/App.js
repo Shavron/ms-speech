@@ -14,9 +14,13 @@ const SpeechTranslator = () => {
   const [transcription, setTranscription] = useState("");
   const [isTranslating, setIsTranslating] = useState(false);
   const [enableTTS, setEnableTTS] = useState(true);
+  const [synthesisReady, setSynthesisReady] = useState(false);
 
   const recognizerRef = useRef(null);
   const synthesizersRef = useRef({});
+  const speechConfigRef = useRef(null);
+  const speechQueueRef = useRef([]);
+  const isSpeakingRef = useRef(false);
 
   const subscriptionKey = process.env.REACT_APP_subscriptionKey;
   const serviceRegion = process.env.REACT_APP_serviceRegion; // e.g., "eastus"
@@ -133,55 +137,142 @@ const SpeechTranslator = () => {
     { code: "yua", name: "Yucatec Maya" },
   ];
 
-  // Creates or gets a speech synthesizer for the given language
-  const getSynthesizer = (lang) => {
-    if (synthesizersRef.current[lang]) {
-      return synthesizersRef.current[lang];
-    }
+  // Initialize speech config once
+  useEffect(() => {
+    if (!subscriptionKey || !serviceRegion) return;
 
-    // Create speech config
-    const speechConfig = SpeechConfig.fromSubscription(
+    speechConfigRef.current = SpeechConfig.fromSubscription(
       subscriptionKey,
       serviceRegion
     );
 
-    // Set the voice name based on the language or use a default
-    const voiceName = voiceMap[lang] || `${lang}-Neural`;
-    speechConfig.speechSynthesisVoiceName = voiceName;
+    // Pre-initialize the synthesizer for the default output language
+    initializeSynthesizer(outputLang).then(() => {
+      setSynthesisReady(true);
+    });
 
-    // Create the synthesizer without audio config (will use default speakers)
-    const synthesizer = new SpeechSynthesizer(speechConfig);
+    return () => {
+      // Clean up synthesizers when component unmounts
+      cleanupSynthesizers();
+    };
+  }, [subscriptionKey, serviceRegion]);
 
-    // Store it for reuse
-    synthesizersRef.current[lang] = synthesizer;
+  // Initialize synthesizer when output language changes
+  useEffect(() => {
+    if (!isTranslating && speechConfigRef.current) {
+      initializeSynthesizer(outputLang).then(() => {
+        setSynthesisReady(true);
+      });
+    }
+  }, [outputLang, isTranslating]);
 
-    return synthesizer;
+  // Process speech queue
+  useEffect(() => {
+    processSpeechQueue();
+  }, [synthesisReady]);
+
+  // Initialize synthesizer for a specific language and cache it
+  const initializeSynthesizer = async (lang) => {
+    if (synthesizersRef.current[lang]) return;
+
+    try {
+      const speechConfig = speechConfigRef.current.clone();
+
+      // Set the voice name based on the language or use a default
+      const voiceName = voiceMap[lang] || `${lang}-Neural`;
+      speechConfig.speechSynthesisVoiceName = voiceName;
+
+      // Create the synthesizer
+      const synthesizer = new SpeechSynthesizer(speechConfig);
+
+      // Store it for reuse
+      synthesizersRef.current[lang] = synthesizer;
+
+      // Pre-synthesize a blank space to warm up the connection
+      await new Promise((resolve, reject) => {
+        synthesizer.speakTextAsync(
+          " ",  // Just a space to warm up the connection
+          result => {
+            resolve(result);
+          },
+          error => {
+            console.warn("Warm-up synthesis failed:", error);
+            resolve(null); // Resolve anyway to continue
+          }
+        );
+      });
+
+      return synthesizer;
+    } catch (error) {
+      console.error(`Failed to initialize speech synthesis for ${lang}:`, error);
+      return null;
+    }
+  };
+
+  // Add text to speech queue
+  const queueSpeechSynthesis = (text, lang) => {
+    speechQueueRef.current.push({ text, lang });
+    processSpeechQueue();
+  };
+
+  // Process the speech queue
+  const processSpeechQueue = async () => {
+    if (isSpeakingRef.current || speechQueueRef.current.length === 0 || !synthesisReady) {
+      return;
+    }
+
+    isSpeakingRef.current = true;
+    const { text, lang } = speechQueueRef.current.shift();
+
+    try {
+      // Get or create synthesizer
+      let synthesizer = synthesizersRef.current[lang];
+      if (!synthesizer) {
+        synthesizer = await initializeSynthesizer(lang);
+        if (!synthesizer) throw new Error("Could not initialize synthesizer");
+      }
+
+      // Speak the text
+      await new Promise((resolve, reject) => {
+        synthesizer.speakTextAsync(
+          text,
+          result => {
+            resolve(result);
+          },
+          error => {
+            console.error(`Error synthesizing speech: ${error}`);
+            reject(error);
+          }
+        );
+      });
+    } catch (error) {
+      console.error("Speech synthesis failed:", error);
+    } finally {
+      isSpeakingRef.current = false;
+      // Process next item in queue
+      setTimeout(processSpeechQueue, 50);
+    }
   };
 
   // Function to speak the translated text
   const speakTranslation = (text, lang) => {
-    console.log('Speaking:', text);
-    if (!enableTTS) return;
+    if (!enableTTS || !text || text.trim().length === 0) return;
+    queueSpeechSynthesis(text, lang);
+  };
 
-    try {
-      const synthesizer = getSynthesizer(lang);
-      synthesizer.speakTextAsync(
-        text,
-        result => {
-          if (result) {
-            synthesizer.close();
-            delete synthesizersRef.current[lang];
-          }
-        },
-        error => {
-          console.error(`Error synthesizing speech: ${error}`);
-          synthesizer.close();
-          delete synthesizersRef.current[lang];
-        }
-      );
-    } catch (error) {
-      console.error(`Failed to initialize speech synthesis: ${error}`);
-    }
+  // Clean up synthesizers
+  const cleanupSynthesizers = () => {
+    // Close all synthesizers
+    Object.values(synthesizersRef.current).forEach(synthesizer => {
+      try {
+        synthesizer.close();
+      } catch (e) {
+        console.error("Error closing synthesizer:", e);
+      }
+    });
+    synthesizersRef.current = {};
+    speechQueueRef.current = [];
+    isSpeakingRef.current = false;
   };
 
   const initializeRecognizer = () => {
@@ -231,9 +322,13 @@ const SpeechTranslator = () => {
   const startTranslation = () => {
     setTranscription("");
     setIsTranslating(true);
-    initializeRecognizer();
 
-    recognizerRef.current?.startContinuousRecognitionAsync();
+    // Make sure we have a synthesizer ready for the current language
+    initializeSynthesizer(outputLang).then(() => {
+      setSynthesisReady(true);
+      initializeRecognizer();
+      recognizerRef.current?.startContinuousRecognitionAsync();
+    });
   };
 
   const stopTranslation = () => {
@@ -252,16 +347,6 @@ const SpeechTranslator = () => {
         }
       );
     }
-
-    // Close all synthesizers
-    Object.values(synthesizersRef.current).forEach(synthesizer => {
-      try {
-        synthesizer.close();
-      } catch (e) {
-        console.error("Error closing synthesizer:", e);
-      }
-    });
-    synthesizersRef.current = {};
   };
 
   useEffect(() => {
@@ -271,13 +356,6 @@ const SpeechTranslator = () => {
       // Ignore scroll errors
     }
   }, [transcription]);
-
-  useEffect(() => {
-    return () => {
-      stopTranslation();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
     <div style={{ padding: "20px", fontFamily: "sans-serif", maxWidth: "600px", margin: "0 auto" }}>
@@ -328,10 +406,17 @@ const SpeechTranslator = () => {
       </div>
 
       <div style={{ marginBottom: "10px" }}>
-        <button onClick={startTranslation} disabled={isTranslating}>
-          Start Translation
+        <button
+          onClick={startTranslation}
+          disabled={isTranslating || !synthesisReady}
+        >
+          {synthesisReady ? "Start Translation" : "Initializing..."}
         </button>
-        <button onClick={stopTranslation} disabled={!isTranslating} style={{ marginLeft: "10px" }}>
+        <button
+          onClick={stopTranslation}
+          disabled={!isTranslating}
+          style={{ marginLeft: "10px" }}
+        >
           Stop Translation
         </button>
       </div>
@@ -342,6 +427,12 @@ const SpeechTranslator = () => {
         readOnly
         style={{ width: "100%", height: "200px", resize: "none" }}
       />
+
+      {!synthesisReady && (
+        <div style={{ marginTop: "10px", color: "#666" }}>
+          Initializing speech synthesis...
+        </div>
+      )}
     </div>
   );
 };
