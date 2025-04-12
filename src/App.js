@@ -6,10 +6,11 @@ import {
   ResultReason,
   SpeechConfig,
   SpeechSynthesizer,
+  PropertyId
 } from "microsoft-cognitiveservices-speech-sdk";
 
 const SpeechTranslator = () => {
-  const [inputLang, setInputLang] = useState("en-US");
+  const [inputLang, setInputLang] = useState("es-ES");
   const [outputLang, setOutputLang] = useState("hi");
   const [transcription, setTranscription] = useState("");
   const [isTranslating, setIsTranslating] = useState(false);
@@ -22,8 +23,12 @@ const SpeechTranslator = () => {
   const speechQueueRef = useRef([]);
   const isSpeakingRef = useRef(false);
 
+  // const subscriptionKey = "DDTWptSXJ4jEwuXk74JiwzwuD0U6njbrNdB8cEQvdhUndeKTxY0zJQQJ99BDACGhslBXJ3w3AAAYACOGqo0X";//process.env.REACT_APP_subscriptionKey;
+  // const serviceRegion = "centralindia";//process.env.REACT_APP_serviceRegion;
+
   const subscriptionKey = process.env.REACT_APP_subscriptionKey;
-  const serviceRegion = process.env.REACT_APP_serviceRegion; // e.g., "eastus"
+  const serviceRegion = process.env.REACT_APP_serviceRegion;
+
 
   // Map of language codes to voice names for TTS
   const voiceMap = {
@@ -76,7 +81,7 @@ const SpeechTranslator = () => {
     { code: "gu", name: "Gujarati" },
     { code: "ht", name: "Haitian Creole" },
     { code: "he", name: "Hebrew" },
-    { code: "hi", name: "Hindi" },
+    { code: "hi-IN", name: "Hindi" },
     { code: "mww", name: "Hmong Daw" },
     { code: "hu", name: "Hungarian" },
     { code: "is", name: "Icelandic" },
@@ -177,6 +182,18 @@ const SpeechTranslator = () => {
 
     try {
       const speechConfig = speechConfigRef.current.clone();
+
+
+      // Configure silence timeout (in milliseconds)
+      speechConfig.setProperty("Speech.SegmentationSilenceTimeoutMs", "1000");
+
+      // Configure initial silence timeout
+      speechConfig.setProperty(PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000");
+
+      // Configure endpoint detection settings
+      speechConfig.setProperty(PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "1000");
+
+
 
       // Set the voice name based on the language or use a default
       const voiceName = voiceMap[lang] || `${lang}-Neural`;
@@ -290,7 +307,10 @@ const SpeechTranslator = () => {
     recognizerRef.current = recognizer;
 
     recognizer.recognizing = (s, e) => {
+
       const translation = e.result.translations.get(outputLang);
+      // const translation = e.result.text;
+      console.log(e.result.text, translation)
       setTranscription((prev) => `${prev}\n[Interim]: ${translation}`);
     };
 
@@ -358,17 +378,18 @@ const SpeechTranslator = () => {
   }, [transcription]);
 
   return (
-    <div style={{ padding: "20px", fontFamily: "sans-serif", maxWidth: "600px", margin: "0 auto" }}>
-      <h2>Azure Speech Translator</h2>
+    <div className="p-6 font-sans max-w-lg mx-auto bg-white rounded-lg shadow-md">
+      <h2 className="text-2xl font-bold mb-4 text-gray-800">Azure Speech Translator</h2>
 
-      <div style={{ marginBottom: "10px" }}>
-        <label>Input Language: </label>
+      <div className="mb-4">
+        <label className="block text-gray-700 mb-1">Input Language: </label>
         <select
           value={inputLang}
           onChange={(e) => setInputLang(e.target.value)}
           disabled={isTranslating}
+          className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
         >
-          <option key={''} value={''}>-- input language --</option>
+          <option value="">-- input language --</option>
           {languageOptions.map((lang) => (
             <option key={lang.code} value={lang.code}>
               {lang.name}
@@ -377,14 +398,15 @@ const SpeechTranslator = () => {
         </select>
       </div>
 
-      <div style={{ marginBottom: "10px" }}>
-        <label>Output Language: </label>
+      <div className="mb-4">
+        <label className="block text-gray-700 mb-1">Output Language: </label>
         <select
           value={outputLang}
           onChange={(e) => setOutputLang(e.target.value)}
           disabled={isTranslating}
+          className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
         >
-          <option key={''} value={''}>-- output language --</option>
+          <option value="">-- output language --</option>
           {languageOptions.map((lang) => (
             <option key={lang.code} value={lang.code}>
               {lang.name}
@@ -393,43 +415,45 @@ const SpeechTranslator = () => {
         </select>
       </div>
 
-      <div style={{ marginBottom: "10px" }}>
-        <label>
+      <div className="mb-4">
+        <label className="flex items-center text-gray-700">
           <input
             type="checkbox"
             checked={enableTTS}
             onChange={(e) => setEnableTTS(e.target.checked)}
             disabled={isTranslating}
+            className="mr-2 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
           />
           Enable Text-to-Speech
         </label>
       </div>
 
-      <div style={{ marginBottom: "10px" }}>
+      <div className="mb-4 flex space-x-3">
         <button
           onClick={startTranslation}
           disabled={isTranslating || !synthesisReady}
+          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
         >
           {synthesisReady ? "Start Translation" : "Initializing..."}
         </button>
         <button
           onClick={stopTranslation}
           disabled={!isTranslating}
-          style={{ marginLeft: "10px" }}
+          className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
         >
           Stop Translation
         </button>
       </div>
 
       <textarea
-        id='chat'
+        id="chat"
         value={transcription}
         readOnly
-        style={{ width: "100%", height: "200px", resize: "none" }}
+        className="w-full h-48 p-2 border border-gray-300 rounded resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
       />
 
       {!synthesisReady && (
-        <div style={{ marginTop: "10px", color: "#666" }}>
+        <div className="mt-3 text-gray-500 text-sm italic">
           Initializing speech synthesis...
         </div>
       )}
